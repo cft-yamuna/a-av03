@@ -7,6 +7,7 @@ import AmbientScene from './components/ambient/AmbientScene';
 import SectorDetailView from './components/sector/SectorDetailView';
 import { CENTERED_DANDELION_SIZE } from './constants/animation';
 import { useTimelineData } from './context/TimelineDataContext';
+import { usePresenceSensor } from './hooks/usePresenceSensor';
 import type { AppState, SectorConfig } from './types';
 
 gsap.registerPlugin(useGSAP);
@@ -21,6 +22,22 @@ export default function App() {
   const [currentDecade, setCurrentDecade] = useState<string | null>(null);
   const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { data } = useTimelineData();
+  const { isPresent, sensorConnected } = usePresenceSensor({ enabled: true });
+
+  // Sensor-driven: wake on presence, idle on sensor clear after timeout.
+  useEffect(() => {
+    if (!sensorConnected) return;
+
+    if (isPresent) {
+      setAppState((prev) => (prev === 'idle' ? 'active' : prev));
+      if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+    } else {
+      if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+      inactivityTimer.current = setTimeout(() => {
+        setAppState((prev) => (prev === 'active' ? 'idle' : prev));
+      }, INACTIVITY_TIMEOUT * 1000);
+    }
+  }, [isPresent, sensorConnected]);
 
   // ── Activity detection: idle → active on mouse/keyboard ──
   useEffect(() => {
@@ -81,6 +98,23 @@ export default function App() {
 
   return (
     <FullscreenContainer>
+      {!sensorConnected && (
+        <div style={{
+          position: 'absolute',
+          top: 12,
+          right: 12,
+          zIndex: 9999,
+          background: 'rgba(255, 60, 60, 0.85)',
+          color: '#fff',
+          padding: '4px 12px',
+          borderRadius: 6,
+          fontSize: 12,
+          fontFamily: 'monospace',
+          pointerEvents: 'none',
+        }}>
+          Sensor offline
+        </div>
+      )}
       <BackgroundGradient sectorColor={selectedSector?.color ?? null} />
       <AmbientScene
         appState={appState}
