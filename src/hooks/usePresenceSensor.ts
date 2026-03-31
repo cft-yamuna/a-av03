@@ -1,71 +1,118 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 
 /**
- * Listens for human presence events from the local hardware agent.
- * The agent broadcasts via ws://127.0.0.1:3402.
+ * Communicates directly with hardware via Web Serial API.
+ * 
+ * Configured for:
+ * - Baud Rate: 115200
+ * - Signals: "present", "clear"
  */
 export function usePresenceSensor(opts: { enabled: boolean }): {
   isPresent: boolean;
   sensorConnected: boolean;
+  connectHardware: () => Promise<void>;
+  error: string | null;
 } {
   const [isPresent, setIsPresent] = useState(false);
   const [sensorConnected, setSensorConnected] = useState(false);
-  const hasReceivedEvent = useRef(false);
+  const [error, setError] = useState<string | null>(null);
+  
+  const portRef = useRef<any>(null);
+  const readerRef = useRef<any>(null);
+  const keepReading = useRef(true);
 
-  useEffect(() => {
-    if (!opts.enabled) return;
+  const readLoop = useCallback(async (port: any) => {
+    const decoder = new TextDecoder();
+    let buffer = '';
 
-    let ws: WebSocket | null = null;
-    let closed = false;
-
-    function connect() {
+    while (port.readable && keepReading.current) {
+      readerRef.current = port.readable.getReader();
       try {
-        ws = new WebSocket('ws://127.0.0.1:3402');
-        ws.onmessage = (e) => {
-          try {
-            const msg = JSON.parse(e.data) as {
-              type?: string;
-              payload?: { type?: string; state?: string };
-            };
-            if (msg.type !== 'hardware:event' || !msg.payload) return;
+        while (true) {
+          const { value, done } = await readerRef.current.read();
+          if (done) break;
+          
+          const chunk = decoder.decode(value, { stream: true });
+          buffer += chunk.toLowerCase();
 
-            const eventType = msg.payload.type;
-
-            if (eventType === 'sensor:present') {
-              hasReceivedEvent.current = true;
-              setSensorConnected(true);
-              setIsPresent(true);
-            } else if (eventType === 'sensor:clear') {
-              hasReceivedEvent.current = true;
-              setSensorConnected(true);
-              setIsPresent(false);
-            } else if (eventType === 'sensor:ready') {
-              hasReceivedEvent.current = true;
-              setSensorConnected(true);
-            } else if (eventType === 'sensor:disconnected') {
-              setSensorConnected(false);
-            }
-          } catch {
-            // Ignore parse errors.
+          // Check for specific keywords
+          if (buffer.includes('present')) {
+            setIsPresent(true);
+            setSensorConnected(true);
+            buffer = ''; 
+          } else if (buffer.includes('clear')) {
+            setIsPresent(false);
+            setSensorConnected(true);
+            buffer = '';
           }
-        };
-        ws.onclose = () => {
-          if (!closed) setTimeout(connect, 2000);
-        };
-        ws.onerror = () => {
-          // Agent may not be running yet; retry continues on close.
-        };
-      } catch {
-        // Ignore initial connection errors.
+
+          // Keep buffer small
+          if (buffer.length > 100) {
+            buffer = buffer.slice(-50);
+          }
+        }
+      } catch (err) {
+        console.error('Serial read error:', err);
+        setSensorConnected(false);
+        break;
+      } finally {
+        readerRef.current.releaseLock();
       }
     }
+  }, []);
 
-    connect();
+  const connectHardware = useCallback(async () => {
+    if (!('serial' in navigator)) {
+      setError('Web Serial API not supported. Use Chrome or Edge.');
+      return;
+    }
+
+    try {
+      const port = await (navigator as any).serial.requestPort();
+      await port.open({ baudRate: 115200 }); 
+      
+      portRef.current = port;
+      setSensorConnected(true);
+      setError(null);
+      
+      keepReading.current = true;
+      readLoop(port);
+      
+    } catch (err: any) {
+      console.error('Failed to connect:', err);
+      setError(err.message || 'Failed to connect to hardware.');
+      setSensorConnected(false);
+    }
+  }, [readLoop]);
+
+  useEffect(() => {
     return () => {
-      closed = true;
-      ws?.close();
+      keepReading.current = false;
+      readerRef.current?.cancel();
+      portRef.current?.close();
     };
-  }, [opts.enabled]);
+  }, []);
 
-  return { isPresent, sensorConnected };
+  // Auto-reconnect to already paired devices
+  useEffect(() => {
+    if (!opts.enabled || !('serial' in navigator)) return;
+
+    const checkExisting = async () => {
+      const ports = await (navigator as any).serial.getPorts();
+      if (ports.length > 0) {
+        try {
+          const port = ports[0];
+          await port.open({ baudRate: 115200 });
+          portRef.current = port;
+          setSensorConnected(true);
+          readLoop(port);
+        } catch (e) {
+          // Normal if browser requires a new gesture
+        }
+      }
+    };
+    checkExisting();
+  }, [opts.enabled, readLoop]);
+
+  return { isPresent, sensorConnected, connectHardware, error };
 }

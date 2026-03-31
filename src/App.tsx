@@ -22,7 +22,7 @@ export default function App() {
   const [currentDecade, setCurrentDecade] = useState<string | null>(null);
   const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { data } = useTimelineData();
-  const { isPresent, sensorConnected } = usePresenceSensor({ enabled: true });
+  const { isPresent, sensorConnected, connectHardware, error } = usePresenceSensor({ enabled: true });
 
   // Sensor-driven: wake on presence, idle on sensor clear after timeout.
   useEffect(() => {
@@ -104,15 +104,40 @@ export default function App() {
           top: 12,
           right: 12,
           zIndex: 9999,
-          background: 'rgba(255, 60, 60, 0.85)',
-          color: '#fff',
-          padding: '4px 12px',
-          borderRadius: 6,
-          fontSize: 12,
-          fontFamily: 'monospace',
-          pointerEvents: 'none',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-end',
+          gap: 4,
         }}>
-          Sensor offline
+          <button
+            onClick={connectHardware}
+            style={{
+              background: 'rgba(255, 60, 60, 0.85)',
+              color: '#fff',
+              border: 'none',
+              padding: '6px 14px',
+              borderRadius: 6,
+              fontSize: 12,
+              fontFamily: 'sans-serif',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+            }}
+          >
+            Connect Sensor
+          </button>
+          {error && (
+            <div style={{
+              background: 'rgba(0,0,0,0.7)',
+              color: '#ffaaaa',
+              padding: '4px 8px',
+              borderRadius: 4,
+              fontSize: 10,
+              maxWidth: 200,
+              textAlign: 'right',
+            }}>
+              {error}
+            </div>
+          )}
         </div>
       )}
       <BackgroundGradient sectorColor={selectedSector?.color ?? null} />
