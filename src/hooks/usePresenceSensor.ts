@@ -35,12 +35,17 @@ export function usePresenceSensor(opts: { enabled: boolean }): {
           const chunk = decoder.decode(value, { stream: true });
           buffer += chunk.toLowerCase();
 
+          // Log the received chunks for debugging
+          console.log('Received chunk:', chunk, 'Current buffer:', buffer);
+
           // Check for specific keywords
           if (buffer.includes('present')) {
+            console.log('Triggering: present');
             setIsPresent(true);
             setSensorConnected(true);
             buffer = ''; 
           } else if (buffer.includes('clear')) {
+            console.log('Triggering: clear');
             setIsPresent(false);
             setSensorConnected(true);
             buffer = '';
@@ -52,13 +57,16 @@ export function usePresenceSensor(opts: { enabled: boolean }): {
           }
         }
       } catch (err) {
-        console.error('Serial read error:', err);
+        console.error('Serial read error (Device may have disconnected):', err);
         setSensorConnected(false);
         break;
       } finally {
-        readerRef.current.releaseLock();
+        if (readerRef.current) {
+          readerRef.current.releaseLock();
+        }
       }
     }
+    console.log('Exiting read loop for port.');
   }, []);
 
   const connectHardware = useCallback(async () => {
@@ -68,18 +76,28 @@ export function usePresenceSensor(opts: { enabled: boolean }): {
     }
 
     try {
+      console.log('Requesting COM port...');
       const port = await (navigator as any).serial.requestPort();
+      console.log('Port selected. Attempting to open at 115200 baud...');
       await port.open({ baudRate: 115200 }); 
+      
+      try {
+        await port.setSignals({ dataTerminalReady: true, requestToSend: true });
+        console.log('Signals DTR/RTS enabled (allows hardware to start sending)');
+      } catch (warn) {
+        console.warn('Could not set DTR/RTS (not all boards support this):', warn);
+      }
       
       portRef.current = port;
       setSensorConnected(true);
       setError(null);
+      console.log('Hardware connection successful! Listening for data...');
       
       keepReading.current = true;
       readLoop(port);
       
     } catch (err: any) {
-      console.error('Failed to connect:', err);
+      console.error('Failed to connect to COM port:', err);
       setError(err.message || 'Failed to connect to hardware.');
       setSensorConnected(false);
     }
@@ -100,13 +118,24 @@ export function usePresenceSensor(opts: { enabled: boolean }): {
     const checkExisting = async () => {
       const ports = await (navigator as any).serial.getPorts();
       if (ports.length > 0) {
+        console.log(`Found ${ports.length} previously paired ports. Trying auto-connect...`);
         try {
           const port = ports[0];
           await port.open({ baudRate: 115200 });
+          
+          try {
+            await port.setSignals({ dataTerminalReady: true, requestToSend: true });
+          } catch (warn) {
+            console.warn('Auto-connect: Could not set DTR/RTS:', warn);
+          }
+
           portRef.current = port;
           setSensorConnected(true);
+          console.log('Auto-connected to hardware! Listening for data...');
+          keepReading.current = true;
           readLoop(port);
         } catch (e) {
+          console.log('Auto-connect failed. Needs new user interaction/gesture.', e);
           // Normal if browser requires a new gesture
         }
       }
